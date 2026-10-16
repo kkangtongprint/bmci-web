@@ -261,7 +261,7 @@ export default function App() {
         EMAILJS_PUBLIC_KEY
       );
 
-      // 3. 입력폼 초기화 및 목록 새로고침
+            // 3. 입력폼 초기화 및 목록 새로고침 & 화면 전환
       await fetchPosts();
       setAuthor('');
       setEmail('');
@@ -273,9 +273,12 @@ export default function App() {
       setHasProductDesign('아니오');
       setDetails('');
       setMessage('');
+      
+      // 👇 이 부분이 핵심입니다! 등록 후 바로 목록 화면으로 이동
       setInquiryView('list');
       
-      alert('상담 문의가 성공적으로 접수되었으며, 대표님 메일(inkman2000@naver.com)로 알림 메일이 발송되었습니다.');
+      alert('상담 문의가 성공적으로 접수되었으며, 대표님 메일로 알림 메일이 발송되었습니다.');
+
     } catch (error) {
       console.error('등록 에러:', error);
       alert('문의 등록 중 오류가 발생했습니다. 설정을 다시 확인해주세요.');
