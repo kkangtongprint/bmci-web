@@ -281,6 +281,33 @@ export default function App() {
     }
 
     setIsUploading(true);
+// ✅ Web3Forms로 inkman2000@naver.com 에 즉시 메일 발송
+      fetch('https://api.web3forms.com/submit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          access_key: 'd02f65eb-7fa8-41ce-b381-7d4b9bc74f1f',
+          subject: `[BMCI 상담문의] ${author}님의 문의가 접수되었습니다`,
+          from_name: `${author} (BMCI 고객문의)`,
+          email: email,
+          message: `
+[BMCI 홈페이지 신규 고객 상담 문의]
+--------------------------------------------------
+• 작성자 / 기업명: ${author}
+• 회신 이메일: ${email}
+• 문의 규격: ${selectedStandards.join(', ')}
+• 직원수: ${employeeCount || '미입력'}
+• 제품 설계 여부: ${hasProductDesign}
+• 주요 업무: ${businessStatus || '미입력'}
+• 세부 사항: ${details || '미입력'}
+--------------------------------------------------
+[문의 내용]
+${message}
+          `.trim()
+        })
+      }).catch(err => console.warn('Web3Forms 전송 오류:', err));
+
+
 
     try {
       // ✅ 1단계: 파일이 있으면 Supabase Storage에 업로드
