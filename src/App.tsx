@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { supabase } from './supabaseClient';
 import emailjs from '@emailjs/browser';
 
@@ -19,8 +19,8 @@ const MODELS = [
       description: 'IATF 16949 인증 획득을 위한 규칙 6판 (Rule 6th)의 인증 적용성에 따라 다음과 같은 경우 인증을 취득할 수 있습니다.',
       items: [
         '1) 자동차 산업 제품 및 차량을 제조하는 조직',
-        '2) “자동차 산업 차량”은 공공 도로에서 주행하는 동종의 차량으로 이해',
-        '3) “자동차 산업 제품”은 다음과 같이 이해',
+        '2) "자동차 산업 차량"은 공공 도로에서 주행하는 동종의 차량으로 이해',
+        '3) "자동차 산업 제품"은 다음과 같이 이해',
         '   (1) 자동차 산업 고객의 규격/시방에 따라 제조되고, 제조 과정에서 자동차에 통합되는 부품 (소프트웨어가 내장된 부품 포함) 및 가공 재료 (생산 부품 또는 생산재료)',
         '   (2) OEM에 의해 조달되거나 출하되는 OEM 규격/시방으로 제조되는 부품과 제조 후 그리고 최종 고객에게 인도 전 또는 후에 자동차 산업 차량에 통합되는 부품'
       ]
@@ -115,6 +115,11 @@ const PROCESS_STEPS = [
   { step: '07', title: '심사 수행', desc: '인증기관 심사 입회 및 최종 인증 획득 지원' },
 ];
 
+// ✅ 허용 파일 확장자 (보안 고려)
+const ALLOWED_EXTENSIONS = ['jpg', 'jpeg', 'png', 'gif', 'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'zip', 'hwp'];
+// ✅ 최대 파일 크기: 10MB
+const MAX_FILE_SIZE_MB = 10;
+
 interface InquiryPost {
   id: string | number;
   date: string;
@@ -129,6 +134,9 @@ interface InquiryPost {
   details?: string;
   message: string;
   reply?: string;
+  // ✅ 추가: 첨부파일
+  fileUrl?: string;
+  fileName?: string;
 }
 
 function BmciLogo({ scale = 1 }: { scale?: number }) {
@@ -143,10 +151,22 @@ function BmciLogo({ scale = 1 }: { scale?: number }) {
 }
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'home' | 'models' | 'process' | 'inquiry' | 'admin'>('home');
+  // ✅ F5 새로고침 후에도 마지막 탭 유지 (localStorage 사용)
+  const [activeTab, setActiveTab] = useState<'home' | 'models' | 'process' | 'inquiry' | 'admin'>(() => {
+    const saved = localStorage.getItem('bmci_active_tab');
+    const validTabs = ['home', 'models', 'process', 'inquiry'];
+    return (validTabs.includes(saved || '') ? saved : 'home') as 'home' | 'models' | 'process' | 'inquiry' | 'admin';
+  });
   const [selectedModel, setSelectedModel] = useState(MODELS[0]);
 
   const [posts, setPosts] = useState<InquiryPost[]>([]);
+
+  // ✅ 탭 변경 시 localStorage에 저장 (admin 탭은 저장 안 함 - 보안)
+  useEffect(() => {
+    if (activeTab !== 'admin') {
+      localStorage.setItem('bmci_active_tab', activeTab);
+    }
+  }, [activeTab]);
 
   useEffect(() => {
     fetchPosts();
@@ -178,7 +198,10 @@ export default function App() {
           hasProductDesign: typeof item.has_product_design === 'boolean' ? (item.has_product_design ? '예' : '아니오') : (item.has_product_design || '아니오'),
           details: item.details || '',
           message: item.content || item.message || '',
-          reply: item.reply || ''
+          reply: item.reply || '',
+          // ✅ 추가: 첨부파일 URL 및 파일명 매핑
+          fileUrl: item.file_url || '',
+          fileName: item.file_name || '',
         }));
         setPosts(formattedPosts);
       }
@@ -202,6 +225,11 @@ export default function App() {
   const [details, setDetails] = useState('');
   const [message, setMessage] = useState('');
 
+  // ✅ 추가: 파일 업로드 상태
+  const [attachedFile, setAttachedFile] = useState<File | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   const [isAdminLoggedIn, setIsAdminLoggedIn] = useState(false);
   const [adminPasswordInput, setAdminPasswordInput] = useState('');
 
@@ -211,6 +239,34 @@ export default function App() {
     } else {
       setSelectedStandards([...selectedStandards, stdName]);
     }
+  };
+
+  // ✅ 추가: 파일 선택 핸들러 (확장자 및 용량 검사 포함)
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const ext = file.name.split('.').pop()?.toLowerCase() || '';
+    if (!ALLOWED_EXTENSIONS.includes(ext)) {
+      alert(`허용되지 않는 파일 형식입니다.\n업로드 가능: ${ALLOWED_EXTENSIONS.join(', ')}`);
+      e.target.value = '';
+      return;
+    }
+
+    const sizeMB = file.size / (1024 * 1024);
+    if (sizeMB > MAX_FILE_SIZE_MB) {
+      alert(`파일 크기가 너무 큽니다. (최대 ${MAX_FILE_SIZE_MB}MB)\n현재 파일: ${sizeMB.toFixed(1)}MB`);
+      e.target.value = '';
+      return;
+    }
+
+    setAttachedFile(file);
+  };
+
+  // ✅ 추가: 파일 제거
+  const handleRemoveFile = () => {
+    setAttachedFile(null);
+    if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
   const handleRegisterPost = async (e: React.FormEvent) => {
@@ -224,8 +280,40 @@ export default function App() {
       return;
     }
 
+    setIsUploading(true);
+
     try {
-      // Supabase DB에 유연하게 저장되는 구조 (컬럼 에러 방지)
+      // ✅ 1단계: 파일이 있으면 Supabase Storage에 업로드
+      let fileUrl = '';
+      let fileName = '';
+
+      if (attachedFile) {
+        const ext = attachedFile.name.split('.').pop()?.toLowerCase() || '';
+        const uniquePath = `${Date.now()}_${Math.random().toString(36).substring(2, 8)}.${ext}`;
+
+        const { data: uploadData, error: uploadError } = await supabase.storage
+          .from('inquiry-files')   // ← Supabase Storage 버킷 이름
+          .upload(uniquePath, attachedFile, {
+            cacheControl: '3600',
+            upsert: false,
+          });
+
+        if (uploadError) {
+          console.error('파일 업로드 에러:', uploadError);
+          alert('파일 업로드 중 오류가 발생했습니다.\n' + uploadError.message + '\n\nSupabase Storage 버킷(inquiry-files)이 생성되어 있는지 확인해 주세요.');
+          setIsUploading(false);
+          return;
+        }
+
+        const { data: urlData } = supabase.storage
+          .from('inquiry-files')
+          .getPublicUrl(uploadData.path);
+
+        fileUrl = urlData.publicUrl;
+        fileName = attachedFile.name;
+      }
+
+      // ✅ 2단계: DB 저장 (file_url, file_name 포함)
       const payload: any = {
         author,
         email,
@@ -236,7 +324,9 @@ export default function App() {
         details,
         content: message,
         is_secret: isSecret,
-        password: isSecret ? password : ''
+        password: isSecret ? password : '',
+        file_url: fileUrl,
+        file_name: fileName,
       };
 
       const { error: dbError } = await supabase.from('inquiries').insert([payload]);
@@ -244,10 +334,11 @@ export default function App() {
       if (dbError) {
         console.error('Supabase DB 저장 에러:', dbError);
         alert('DB 저장 오류: ' + dbError.message);
+        setIsUploading(false);
         return;
       }
 
-      // EmailJS 메일 발송
+      // ✅ 3단계: EmailJS 메일 발송
       try {
         const templateParams = {
           author,
@@ -258,6 +349,7 @@ export default function App() {
           hasProductDesign,
           details: details || '미입력',
           message,
+          attachedFileName: fileName || '첨부파일 없음',
           to_email: 'inkman2000@naver.com'
         };
 
@@ -271,7 +363,7 @@ export default function App() {
         console.warn('EmailJS 발송 오류 (DB 저장은 성공함):', emailErr);
       }
 
-      // 목록 새로고침 및 입력창 초기화
+      // ✅ 4단계: 폼 초기화 및 목록으로 이동
       await fetchPosts();
 
       setAuthor('');
@@ -284,14 +376,16 @@ export default function App() {
       setHasProductDesign('아니오');
       setDetails('');
       setMessage('');
+      setAttachedFile(null);
+      if (fileInputRef.current) fileInputRef.current.value = '';
 
-      // 목록 화면으로 강제 이동
       setInquiryView('list');
-
-      alert('상담 문의가 성공적으로 접수되었습니다.');
+      alert('상담 문의가 성공적으로 접수되었습니다.' + (fileName ? `\n첨부파일: ${fileName}` : ''));
     } catch (error: any) {
       console.error('등록 에러:', error);
       alert('문의 등록 중 오류가 발생했습니다: ' + (error?.message || '알 수 없는 오류'));
+    } finally {
+      setIsUploading(false);
     }
   };
 
@@ -329,6 +423,15 @@ export default function App() {
   const handleDeletePost = async (postId: string | number) => {
     if (window.confirm('정말 이 문의 글을 삭제하시겠습니까?')) {
       try {
+        // ✅ 첨부파일도 Storage에서 함께 삭제
+        const targetPost = posts.find(p => p.id === postId);
+        if (targetPost?.fileUrl) {
+          const pathMatch = targetPost.fileUrl.match(/inquiry-files\/(.+)$/);
+          if (pathMatch) {
+            await supabase.storage.from('inquiry-files').remove([pathMatch[1]]);
+          }
+        }
+
         const { error } = await supabase
           .from('inquiries')
           .delete()
@@ -357,6 +460,25 @@ export default function App() {
     } else {
       alert('비밀번호가 올바르지 않습니다.');
     }
+  };
+
+  // ✅ 파일 아이콘 판별
+  const getFileIcon = (fileName: string) => {
+    const ext = fileName.split('.').pop()?.toLowerCase() || '';
+    if (['jpg', 'jpeg', 'png', 'gif'].includes(ext)) return '🖼️';
+    if (ext === 'pdf') return '📄';
+    if (['doc', 'docx'].includes(ext)) return '📝';
+    if (['xls', 'xlsx'].includes(ext)) return '📊';
+    if (['ppt', 'pptx'].includes(ext)) return '📑';
+    if (ext === 'zip') return '🗜️';
+    if (ext === 'hwp') return '📃';
+    return '📎';
+  };
+
+  // ✅ 이미지 파일 여부 판별
+  const isImageFile = (fileName: string) => {
+    const ext = fileName.split('.').pop()?.toLowerCase() || '';
+    return ['jpg', 'jpeg', 'png', 'gif'].includes(ext);
   };
 
   return (
@@ -547,13 +669,14 @@ export default function App() {
                       <th style={{ padding: '15px' }}>제목 / 내용 요약</th>
                       <th style={{ padding: '15px' }}>작성자</th>
                       <th style={{ padding: '15px' }}>작성일자</th>
+                      <th style={{ padding: '15px', textAlign: 'center' }}>첨부</th>
                       <th style={{ padding: '15px', textAlign: 'center' }}>답변 상태</th>
                     </tr>
                   </thead>
                   <tbody>
                     {posts.length === 0 ? (
                       <tr>
-                        <td colSpan={6} style={{ textAlign: 'center', padding: '40px', color: '#94a3b8' }}>등록된 문의가 없습니다.</td>
+                        <td colSpan={7} style={{ textAlign: 'center', padding: '40px', color: '#94a3b8' }}>등록된 문의가 없습니다.</td>
                       </tr>
                     ) : (
                       posts.map((post, idx) => (
@@ -577,6 +700,14 @@ export default function App() {
                           </td>
                           <td style={{ padding: '15px', color: '#475569' }}>{post.author}</td>
                           <td style={{ padding: '15px', color: '#64748b', fontSize: '0.9rem' }}>{post.date}</td>
+                          {/* ✅ 첨부파일 여부 표시 */}
+                          <td style={{ padding: '15px', textAlign: 'center' }}>
+                            {post.fileUrl ? (
+                              <span title={post.fileName} style={{ fontSize: '1.2rem' }}>{getFileIcon(post.fileName || '')}</span>
+                            ) : (
+                              <span style={{ color: '#cbd5e1', fontSize: '0.85rem' }}>-</span>
+                            )}
+                          </td>
                           <td style={{ padding: '15px', textAlign: 'center' }}>
                             {post.reply ? (
                               <span style={{ backgroundColor: '#dcfce7', color: '#166534', padding: '4px 10px', borderRadius: '12px', fontSize: '0.8rem', fontWeight: '700' }}>답변완료</span>
@@ -691,9 +822,107 @@ export default function App() {
                     />
                   </div>
 
-                  <button type="submit" style={{ backgroundColor: '#f28c18', color: '#ffffff', border: 'none', padding: '16px', borderRadius: '6px', fontWeight: '800', fontSize: '1.05rem', cursor: 'pointer', marginTop: '10px', boxShadow: '0 4px 6px rgba(242, 140, 24, 0.2)' }}>
-                    상담 문의 접수하기
+                  {/* ✅ 파일 업로드 섹션 */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    <label style={{ fontSize: '0.9rem', color: '#334155', fontWeight: '700' }}>
+                      📎 첨부파일 업로드 <span style={{ fontSize: '0.8rem', color: '#94a3b8', fontWeight: '500' }}>(선택 · 최대 10MB)</span>
+                    </label>
+
+                    {/* 파일 미선택 상태: 클릭 유도 영역 */}
+                    {!attachedFile && (
+                      <label
+                        htmlFor="fileUploadInput"
+                        style={{
+                          display: 'flex',
+                          flexDirection: 'column',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          gap: '8px',
+                          padding: '28px 20px',
+                          border: '2px dashed #cbd5e1',
+                          borderRadius: '8px',
+                          cursor: 'pointer',
+                          backgroundColor: '#f8fafc',
+                          transition: 'border-color 0.2s',
+                        }}
+                        onMouseEnter={e => (e.currentTarget.style.borderColor = '#f28c18')}
+                        onMouseLeave={e => (e.currentTarget.style.borderColor = '#cbd5e1')}
+                      >
+                        <span style={{ fontSize: '2rem' }}>📁</span>
+                        <span style={{ fontSize: '0.95rem', color: '#475569', fontWeight: '600' }}>클릭하여 파일 선택</span>
+                        <span style={{ fontSize: '0.8rem', color: '#94a3b8' }}>
+                          JPG, PNG, GIF, PDF, DOC, DOCX, XLS, XLSX, PPT, ZIP, HWP 허용
+                        </span>
+                      </label>
+                    )}
+
+                    <input
+                      id="fileUploadInput"
+                      ref={fileInputRef}
+                      type="file"
+                      onChange={handleFileChange}
+                      accept=".jpg,.jpeg,.png,.gif,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.zip,.hwp"
+                      style={{ display: 'none' }}
+                    />
+
+                    {/* 파일 선택 후: 미리보기 */}
+                    {attachedFile && (
+                      <div style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '12px',
+                        padding: '14px 18px',
+                        backgroundColor: '#fff8f0',
+                        border: '1px solid #ffe0b2',
+                        borderRadius: '8px',
+                      }}>
+                        <span style={{ fontSize: '1.8rem' }}>{getFileIcon(attachedFile.name)}</span>
+                        <div style={{ flex: 1 }}>
+                          <p style={{ margin: 0, fontWeight: '700', color: '#0f172a', fontSize: '0.95rem' }}>{attachedFile.name}</p>
+                          <p style={{ margin: '2px 0 0 0', fontSize: '0.8rem', color: '#64748b' }}>
+                            {(attachedFile.size / 1024 / 1024).toFixed(2)} MB
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleRemoveFile}
+                          style={{ backgroundColor: '#fee2e2', color: '#dc2626', border: 'none', padding: '6px 12px', borderRadius: '6px', cursor: 'pointer', fontWeight: '700', fontSize: '0.85rem' }}
+                        >
+                          제거
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={isUploading}
+                    style={{
+                      backgroundColor: isUploading ? '#94a3b8' : '#f28c18',
+                      color: '#ffffff',
+                      border: 'none',
+                      padding: '16px',
+                      borderRadius: '6px',
+                      fontWeight: '800',
+                      fontSize: '1.05rem',
+                      cursor: isUploading ? 'not-allowed' : 'pointer',
+                      marginTop: '10px',
+                      boxShadow: '0 4px 6px rgba(242, 140, 24, 0.2)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: '8px',
+                    }}
+                  >
+                    {isUploading ? (
+                      <>
+                        <span style={{ display: 'inline-block', width: '18px', height: '18px', border: '3px solid #fff', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
+                        파일 업로드 중...
+                      </>
+                    ) : '상담 문의 접수하기'}
                   </button>
+
+                  <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
 
                 </form>
               </div>
@@ -733,6 +962,32 @@ export default function App() {
                 <div style={{ backgroundColor: '#f8fafc', padding: '20px', borderRadius: '6px', border: '1px solid #e2e8f0', color: '#334155', lineHeight: '1.6', whiteSpace: 'pre-wrap' }}>
                   {selectedPost.message}
                 </div>
+
+                {/* ✅ 첨부파일 표시 영역 */}
+                {selectedPost.fileUrl && selectedPost.fileName && (
+                  <div style={{ backgroundColor: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: '8px', padding: '18px 20px' }}>
+                    <p style={{ margin: '0 0 12px 0', fontWeight: '700', color: '#0369a1', fontSize: '0.95rem' }}>📎 첨부파일</p>
+                    
+                    {/* 이미지면 미리보기 */}
+                    {isImageFile(selectedPost.fileName) && (
+                      <img
+                        src={selectedPost.fileUrl}
+                        alt="첨부 이미지"
+                        style={{ maxWidth: '100%', maxHeight: '300px', objectFit: 'contain', borderRadius: '6px', border: '1px solid #e0f2fe', marginBottom: '10px', display: 'block' }}
+                      />
+                    )}
+
+                    <a
+                      href={selectedPost.fileUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      download={selectedPost.fileName}
+                      style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', backgroundColor: '#0369a1', color: '#ffffff', padding: '10px 18px', borderRadius: '6px', fontWeight: '700', fontSize: '0.9rem', textDecoration: 'none' }}
+                    >
+                      {getFileIcon(selectedPost.fileName)} {selectedPost.fileName} 다운로드
+                    </a>
+                  </div>
+                )}
 
                 <div style={{ borderTop: '2px solid #e2e8f0', paddingTop: '20px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
                   <h4 style={{ margin: 0, color: '#0f172a', fontSize: '1.1rem', fontWeight: '700' }}>관리자 컨설팅 답변</h4>
