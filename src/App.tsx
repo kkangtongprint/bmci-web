@@ -2,12 +2,11 @@ import React, { useState, useEffect } from 'react';
 import { supabase } from './supabaseClient';
 import emailjs from '@emailjs/browser';
 
-// ⚠️ 본인의 EmailJS 키 정보 설정 ⚠️
+// ⚠️ EmailJS 키 정보
 const EMAILJS_SERVICE_ID = 'service_z48cral';
 const EMAILJS_TEMPLATE_ID = 'template_ppm30h9';
 const EMAILJS_PUBLIC_KEY = 'qi8lkMugMKocXZa4K'; 
 
-// --- 데이터 정의 (IATF 16949 Rule 6th 별도 적용성 규정 포함) ---
 const MODELS = [
   { 
     id: 'iatf16949', 
@@ -126,7 +125,7 @@ interface InquiryPost {
   standards: string[];
   employeeCount?: string;
   businessStatus?: string;
-  hasProductDesign?: '예' | '아니오';
+  hasProductDesign?: string;
   details?: string;
   message: string;
   reply?: string;
@@ -147,39 +146,44 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<'home' | 'models' | 'process' | 'inquiry' | 'admin'>('home');
   const [selectedModel, setSelectedModel] = useState(MODELS[0]);
 
-  // Supabase 연동: 초기값을 빈 배열로 설정 후 DB에서 불러옴
   const [posts, setPosts] = useState<InquiryPost[]>([]);
 
-  // 앱 실행 시 Supabase에서 게시글 목록 불러오기
   useEffect(() => {
     fetchPosts();
   }, []);
 
   const fetchPosts = async () => {
-    const { data, error } = await supabase
-      .from('inquiries')
-      .select('*')
-      .order('created_at', { ascending: false });
+    try {
+      const { data, error } = await supabase
+        .from('inquiries')
+        .select('*')
+        .order('created_at', { ascending: false });
 
-    if (error) {
-      console.error('Error fetching posts:', error);
-    } else if (data) {
-      const formattedPosts: InquiryPost[] = data.map((item: any) => ({
-        id: item.id,
-        date: new Date(item.created_at).toISOString().split('T')[0],
-        author: item.author,
-        email: item.email,
-        isSecret: item.is_secret || false,
-        password: item.password || '',
-        standards: item.standards ? item.standards.split(',').map((s: string) => s.trim()) : [],
-        employeeCount: item.employee_count || '',
-        businessStatus: item.business_status || '',
-        hasProductDesign: item.has_product_design || '아니오',
-        details: item.details || '',
-        message: item.content,
-        reply: item.reply || ''
-      }));
-      setPosts(formattedPosts);
+      if (error) {
+        console.error('Error fetching posts:', error);
+        return;
+      }
+
+      if (data) {
+        const formattedPosts: InquiryPost[] = data.map((item: any) => ({
+          id: item.id,
+          date: item.created_at ? new Date(item.created_at).toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
+          author: item.author || '익명',
+          email: item.email || '',
+          isSecret: item.is_secret || false,
+          password: item.password || '',
+          standards: item.standards ? item.standards.split(',').map((s: string) => s.trim()) : [],
+          employeeCount: item.employee_count || '',
+          businessStatus: item.business_status || '',
+          hasProductDesign: typeof item.has_product_design === 'boolean' ? (item.has_product_design ? '예' : '아니오') : (item.has_product_design || '아니오'),
+          details: item.details || '',
+          message: item.content || item.message || '',
+          reply: item.reply || ''
+        }));
+        setPosts(formattedPosts);
+      }
+    } catch (err) {
+      console.error('fetchPosts catch error:', err);
     }
   };
 
@@ -209,7 +213,6 @@ export default function App() {
     }
   };
 
-  // ✉️ Supabase DB 저장 + EmailJS 전송 로직이 포함된 등록 함수
   const handleRegisterPost = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!author || !email || selectedStandards.length === 0 || !message) {
@@ -222,47 +225,55 @@ export default function App() {
     }
 
     try {
-      // 1. Supabase DB에 데이터 저장
-      const { error: dbError } = await supabase.from('inquiries').insert([
-        {
-          author,
-          email,
-          is_secret: isSecret,
-          password: isSecret ? password : '',
-          standards: selectedStandards.join(', '),
-          employee_count: employeeCount,
-          business_status: businessStatus,
-          has_product_design: hasProductDesign,
-          details,
-          content: message,
-          status: '접수완료'
-        },
-      ]);
-
-      if (dbError) throw dbError;
-
-      // 2. EmailJS 템플릿 변수 매핑 및 메일 전송
-      const templateParams = {
+      // Supabase DB에 유연하게 저장되는 구조 (컬럼 에러 방지)
+      const payload: any = {
         author,
         email,
         standards: selectedStandards.join(', '),
-        employeeCount: employeeCount || '미입력',
-        businessStatus: businessStatus || '미입력',
-        hasProductDesign,
-        details: details || '미입력',
-        message,
-        to_email: 'inkman2000@naver.com'
+        employee_count: employeeCount,
+        business_status: businessStatus,
+        has_product_design: hasProductDesign,
+        details,
+        content: message,
+        is_secret: isSecret,
+        password: isSecret ? password : ''
       };
 
-      await emailjs.send(
-        EMAILJS_SERVICE_ID,
-        EMAILJS_TEMPLATE_ID,
-        templateParams,
-        EMAILJS_PUBLIC_KEY
-      );
+      const { error: dbError } = await supabase.from('inquiries').insert([payload]);
 
-            // 3. 입력폼 초기화 및 목록 새로고침 & 화면 전환
+      if (dbError) {
+        console.error('Supabase DB 저장 에러:', dbError);
+        alert('DB 저장 오류: ' + dbError.message);
+        return;
+      }
+
+      // EmailJS 메일 발송
+      try {
+        const templateParams = {
+          author,
+          email,
+          standards: selectedStandards.join(', '),
+          employeeCount: employeeCount || '미입력',
+          businessStatus: businessStatus || '미입력',
+          hasProductDesign,
+          details: details || '미입력',
+          message,
+          to_email: 'inkman2000@naver.com'
+        };
+
+        await emailjs.send(
+          EMAILJS_SERVICE_ID,
+          EMAILJS_TEMPLATE_ID,
+          templateParams,
+          EMAILJS_PUBLIC_KEY
+        );
+      } catch (emailErr) {
+        console.warn('EmailJS 발송 오류 (DB 저장은 성공함):', emailErr);
+      }
+
+      // 목록 새로고침 및 입력창 초기화
       await fetchPosts();
+
       setAuthor('');
       setEmail('');
       setIsSecret(false);
@@ -273,15 +284,14 @@ export default function App() {
       setHasProductDesign('아니오');
       setDetails('');
       setMessage('');
-      
-      // 👇 이 부분이 핵심입니다! 등록 후 바로 목록 화면으로 이동
-      setInquiryView('list');
-      
-      alert('상담 문의가 성공적으로 접수되었으며, 대표님 메일로 알림 메일이 발송되었습니다.');
 
-    } catch (error) {
+      // 목록 화면으로 강제 이동
+      setInquiryView('list');
+
+      alert('상담 문의가 성공적으로 접수되었습니다.');
+    } catch (error: any) {
       console.error('등록 에러:', error);
-      alert('문의 등록 중 오류가 발생했습니다. 설정을 다시 확인해주세요.');
+      alert('문의 등록 중 오류가 발생했습니다: ' + (error?.message || '알 수 없는 오류'));
     }
   };
 
@@ -310,7 +320,7 @@ export default function App() {
       await fetchPosts();
       setSelectedPost(prev => prev ? { ...prev, reply: adminReplyInput } : null);
       alert('답변이 성공적으로 등록되었습니다.');
-    } catch (err) {
+    } catch (err: any) {
       console.error('답변 저장 오류:', err);
       alert('답변 저장 중 오류가 발생했습니다.');
     }
@@ -332,7 +342,7 @@ export default function App() {
           setSelectedPost(null);
         }
         alert('삭제되었습니다.');
-      } catch (err) {
+      } catch (err: any) {
         console.error('삭제 오류:', err);
         alert('삭제 중 오류가 발생했습니다.');
       }
@@ -352,7 +362,7 @@ export default function App() {
   return (
     <div style={{ minHeight: '100vh', backgroundColor: '#f8fafc', color: '#1e293b', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif', display: 'flex', flexDirection: 'column' }}>
       
-      {/* 상단 헤더 */}
+      {/* 헤더 */}
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '18px 60px', backgroundColor: '#ffffff', borderBottom: '1px solid #e2e8f0', boxShadow: '0 1px 3px rgba(0,0,0,0.02)' }}>
         <div style={{ cursor: 'pointer', display: 'flex', flexDirection: 'column' }} onClick={() => setActiveTab('home')}>
           <BmciLogo />
@@ -366,10 +376,10 @@ export default function App() {
         </nav>
       </header>
 
-      {/* 메인 컨텐츠 */}
+      {/* 메인 */}
       <main style={{ flex: 1, padding: '50px 20px', maxWidth: '1100px', width: '100%', margin: '0 auto', boxSizing: 'border-box' }}>
         
-        {/* 1. 홈 화면 */}
+        {/* 1. 홈 */}
         {activeTab === 'home' && (
           <div style={{ textAlign: 'center', padding: '80px 20px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '25px' }}>
             <span style={{ backgroundColor: '#fff3e0', color: '#e65100', padding: '8px 18px', borderRadius: '4px', fontSize: '0.85rem', fontWeight: '700', letterSpacing: '1px', border: '1px solid #ffe0b2' }}>
@@ -393,7 +403,7 @@ export default function App() {
           </div>
         )}
 
-        {/* 2. 컨설팅 모델 상세 페이지 */}
+        {/* 2. 컨설팅 모델 */}
         {activeTab === 'models' && (
           <div>
             <h2 style={{ fontSize: '2rem', fontWeight: '800', marginBottom: '8px', color: '#0f172a' }}>컨설팅 모델</h2>
@@ -486,7 +496,7 @@ export default function App() {
           </div>
         )}
 
-        {/* 3. 컨설팅 프로세스 화면 */}
+        {/* 3. 프로세스 */}
         {activeTab === 'process' && (
           <div>
             <h2 style={{ fontSize: '2rem', fontWeight: '800', marginBottom: '8px', color: '#0f172a' }}>컨설팅 진행 단계</h2>
@@ -506,7 +516,7 @@ export default function App() {
           </div>
         )}
 
-        {/* 4. 고객 문의 게시판 화면 */}
+        {/* 4. 고객 문의 게시판 */}
         {activeTab === 'inquiry' && (
           <div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '25px' }}>
@@ -582,7 +592,7 @@ export default function App() {
               </div>
             )}
 
-            {/* 글쓰기 뷰 */}
+            {/* 작성 뷰 */}
             {inquiryView === 'write' && (
               <div style={{ maxWidth: '750px', margin: '0 auto' }}>
                 <form onSubmit={handleRegisterPost} style={{ backgroundColor: '#ffffff', padding: '40px', borderRadius: '8px', display: 'flex', flexDirection: 'column', gap: '22px', border: '1px solid #e2e8f0', boxShadow: '0 4px 6px rgba(0,0,0,0.02)' }}>
@@ -689,7 +699,7 @@ export default function App() {
               </div>
             )}
 
-            {/* 상세 보기 및 관리자 답변/삭제 뷰 */}
+            {/* 상세 뷰 */}
             {inquiryView === 'detail' && selectedPost && (
               <div style={{ maxWidth: '750px', margin: '0 auto', backgroundColor: '#ffffff', padding: '40px', borderRadius: '8px', border: '1px solid #e2e8f0', boxShadow: '0 4px 6px rgba(0,0,0,0.02)', display: 'flex', flexDirection: 'column', gap: '25px' }}>
                 
@@ -755,7 +765,7 @@ export default function App() {
           </div>
         )}
 
-        {/* 5. 관리자 모드 화면 */}
+        {/* 5. 관리자 */}
         {activeTab === 'admin' && (
           <div style={{ maxWidth: '600px', margin: '40px auto' }}>
             {!isAdminLoggedIn ? (
@@ -799,7 +809,7 @@ export default function App() {
 
       </main>
 
-      {/* 하단 푸터 */}
+      {/* 푸터 */}
       <footer style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '20px 60px', backgroundColor: '#ffffff', borderTop: '1px solid #e2e8f0', color: '#64748b', fontSize: '0.85rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
           <BmciLogo scale={0.8} />
