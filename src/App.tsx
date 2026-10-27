@@ -19,8 +19,8 @@ const MODELS = [
       description: 'IATF 16949 인증 획득을 위한 규칙 6판 (Rule 6th)의 인증 적용성에 따라 다음과 같은 경우 인증을 취득할 수 있습니다.',
       items: [
         '1) 자동차 산업 제품 및 차량을 제조하는 조직',
-        '2) "자동차 산업 차량"은 공공 도로에서 주행하는 동종의 차량으로 이해',
-        '3) "자동차 산업 제품"은 다음과 같이 이해',
+        '2) “자동차 산업 차량”은 공공 도로에서 주행하는 동종의 차량으로 이해',
+        '3) “자동차 산업 제품”은 다음과 같이 이해',
         '   (1) 자동차 산업 고객의 규격/시방에 따라 제조되고, 제조 과정에서 자동차에 통합되는 부품 (소프트웨어가 내장된 부품 포함) 및 가공 재료 (생산 부품 또는 생산재료)',
         '   (2) OEM에 의해 조달되거나 출하되는 OEM 규격/시방으로 제조되는 부품과 제조 후 그리고 최종 고객에게 인도 전 또는 후에 자동차 산업 차량에 통합되는 부품'
       ]
@@ -115,16 +115,46 @@ const PROCESS_STEPS = [
   { step: '07', title: '심사 수행', desc: '인증기관 심사 입회 및 최종 인증 획득 지원' },
 ];
 
-// ✅ 허용 파일 확장자 (보안 고려)
 const ALLOWED_EXTENSIONS = ['jpg', 'jpeg', 'png', 'gif', 'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'zip', 'hwp'];
-// ✅ 최대 파일 크기: 10MB
 const MAX_FILE_SIZE_MB = 10;
+
+// 금액 숫자를 한글 금액으로 변환하는 함수 (예: 1250000 -> 일백이십오만)
+function numberToKoreanAmount(num: number): string {
+  if (!num || isNaN(num) || num <= 0) return '영';
+  const units = ['', '만', '억', '조'];
+  const smallUnits = ['', '일', '이', '삼', '사', '오', '육', '칠', '팔', '구'];
+  const tens = ['', '십', '백', '천'];
+
+  let result = '';
+  let unitIndex = 0;
+
+  while (num > 0) {
+    const chunk = num % 10000;
+    if (chunk > 0) {
+      let chunkStr = '';
+      const chunkDigits = chunk.toString().padStart(4, '0');
+      for (let i = 0; i < 4; i++) {
+        const digit = parseInt(chunkDigits[i], 10);
+        if (digit > 0) {
+          chunkStr += smallUnits[digit] + tens[3 - i];
+        }
+      }
+      result = chunkStr + units[unitIndex] + ' ' + result;
+    }
+    num = Math.floor(num / 10000);
+    unitIndex++;
+  }
+  return result.trim();
+}
 
 interface InquiryPost {
   id: string | number;
   date: string;
-  author: string;
-  email: string;
+  author: string;          // 통합 or 하위호환
+  companyName?: string;    // 고객명(회사명)
+  managerName?: string;    // 담당자
+  email: string;           // 회신받을 이메일
+  phone?: string;          // 연락처
   isSecret: boolean;
   password?: string;
   standards: string[];
@@ -134,9 +164,18 @@ interface InquiryPost {
   details?: string;
   message: string;
   reply?: string;
-  // ✅ 추가: 첨부파일
   fileUrl?: string;
   fileName?: string;
+}
+
+// 견적서 품목 인터페이스
+interface EstimateItem {
+  id: string;
+  name: string;        // 품명
+  spec: string;        // 규격
+  quantity: number;    // 수량
+  unitPrice: number;   // 단가
+  note: string;        // 비고
 }
 
 function BmciLogo({ scale = 1 }: { scale?: number }) {
@@ -151,7 +190,7 @@ function BmciLogo({ scale = 1 }: { scale?: number }) {
 }
 
 export default function App() {
-  // ✅ F5 새로고침 후에도 마지막 탭 유지 (localStorage 사용)
+  // ✅ 탭 유지: localStorage 연동
   const [activeTab, setActiveTab] = useState<'home' | 'models' | 'process' | 'inquiry' | 'admin'>(() => {
     const saved = localStorage.getItem('bmci_active_tab');
     const validTabs = ['home', 'models', 'process', 'inquiry'];
@@ -161,7 +200,6 @@ export default function App() {
 
   const [posts, setPosts] = useState<InquiryPost[]>([]);
 
-  // ✅ 탭 변경 시 localStorage에 저장 (admin 탭은 저장 안 함 - 보안)
   useEffect(() => {
     if (activeTab !== 'admin') {
       localStorage.setItem('bmci_active_tab', activeTab);
@@ -188,8 +226,11 @@ export default function App() {
         const formattedPosts: InquiryPost[] = data.map((item: any) => ({
           id: item.id,
           date: item.created_at ? new Date(item.created_at).toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
-          author: item.author || '익명',
+          author: item.author || item.company_name || '익명',
+          companyName: item.company_name || (item.author ? item.author.split('/')[0].trim() : ''),
+          managerName: item.manager_name || (item.author && item.author.includes('/') ? item.author.split('/')[1]?.trim() : ''),
           email: item.email || '',
+          phone: item.phone || '',
           isSecret: item.is_secret || false,
           password: item.password || '',
           standards: item.standards ? item.standards.split(',').map((s: string) => s.trim()) : [],
@@ -199,7 +240,6 @@ export default function App() {
           details: item.details || '',
           message: item.content || item.message || '',
           reply: item.reply || '',
-          // ✅ 추가: 첨부파일 URL 및 파일명 매핑
           fileUrl: item.file_url || '',
           fileName: item.file_name || '',
         }));
@@ -214,8 +254,11 @@ export default function App() {
   const [selectedPost, setSelectedPost] = useState<InquiryPost | null>(null);
   const [adminReplyInput, setAdminReplyInput] = useState('');
 
-  const [author, setAuthor] = useState('');
-  const [email, setEmail] = useState('');
+  // 📝 수정된 고객문의 입력 폼 상태
+  const [companyName, setCompanyName] = useState(''); // 고객명(회사명)
+  const [managerName, setManagerName] = useState(''); // 담당자
+  const [email, setEmail] = useState('');             // 회신받을 이메일
+  const [phone, setPhone] = useState('');             // 연락처
   const [isSecret, setIsSecret] = useState(false);
   const [password, setPassword] = useState('');
   const [selectedStandards, setSelectedStandards] = useState<string[]>([]);
@@ -225,14 +268,41 @@ export default function App() {
   const [details, setDetails] = useState('');
   const [message, setMessage] = useState('');
 
-  // ✅ 추가: 파일 업로드 상태
+  // 파일 업로드 상태
   const [attachedFile, setAttachedFile] = useState<File | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // 🔐 관리자 인증 및 비번 변경 상태
   const [isAdminLoggedIn, setIsAdminLoggedIn] = useState(false);
   const [adminPasswordInput, setAdminPasswordInput] = useState('');
+  const [adminPassword, setAdminPassword] = useState<string>(() => {
+    return localStorage.getItem('bmci_admin_pwd') || 'admin1234';
+  });
+  const [newAdminPassword, setNewAdminPassword] = useState('');
+  const [confirmAdminPassword, setConfirmAdminPassword] = useState('');
 
+  // 📑 견적서 관리자 상태
+  const [adminViewMode, setAdminViewMode] = useState<'dashboard' | 'estimate'>('dashboard');
+  
+  // 견적서 정보 상태
+  const [estimateClient, setEstimateClient] = useState({
+    companyName: '',
+    manager: '',
+    tel: '',
+    email: '',
+    date: new Date().toISOString().split('T')[0]
+  });
+
+  const [estimateItems, setEstimateItems] = useState<EstimateItem[]>([
+    { id: '1', name: 'IATF 16949 경영시스템 컨설팅', spec: '인증 컨설팅 및 교육', quantity: 1, unitPrice: 5000000, note: '' },
+    { id: '2', name: '내부심사원 양성 교육', spec: '실무 심사원 교육 (2일)', quantity: 1, unitPrice: 1200000, note: '' }
+  ]);
+
+  const [negotiationDiscount, setNegotiationDiscount] = useState<number>(0); // 네고(할인) 항목
+  const [estimateSpecialNote, setEstimateSpecialNote] = useState('유효기간은 발행일로부터 30일 입니다.');
+
+  // 체크박스 선택
   const handleCheckboxChange = (stdName: string) => {
     if (selectedStandards.includes(stdName)) {
       setSelectedStandards(selectedStandards.filter(s => s !== stdName));
@@ -241,7 +311,7 @@ export default function App() {
     }
   };
 
-  // ✅ 추가: 파일 선택 핸들러 (확장자 및 용량 검사 포함)
+  // 파일 선택
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -263,16 +333,16 @@ export default function App() {
     setAttachedFile(file);
   };
 
-  // ✅ 추가: 파일 제거
   const handleRemoveFile = () => {
     setAttachedFile(null);
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
+  // 고객 문의 등록
   const handleRegisterPost = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!author || !email || selectedStandards.length === 0 || !message) {
-      alert('필수 입력 항목(작성자, 이메일, 문의 규격, 내용)을 모두 채워주세요.');
+    if (!companyName.trim() || !managerName.trim() || !email.trim() || selectedStandards.length === 0 || !message.trim()) {
+      alert('필수 입력 항목(고객명, 담당자, 이메일, 문의 규격, 내용)을 모두 채워주세요.');
       return;
     }
     if (isSecret && password.length !== 4) {
@@ -280,52 +350,9 @@ export default function App() {
       return;
     }
 
-setIsUploading(true);
-
-// ✅ Web3Forms 메일 전송 (await 및 Accept 헤더 추가)
-try {
-  const mailRes = await fetch('https://api.web3forms.com/submit', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Accept': 'application/json',
-    },
-    body: JSON.stringify({
-      access_key: 'd02f65eb-7fa8-41ce-b381-7d4b9bc74f1f',
-      subject: `[BMCI 상담문의] ${author}님의 문의가 접수되었습니다`,
-      from_name: `${author} (BMCI 고객문의)`,
-      email: email,
-      message: `
-[BMCI 홈페이지 신규 고객 상담 문의]
---------------------------------------
-* 작성자 / 기업명: ${author}
-* 회신 이메일: ${email}
-* 문의 규격: ${selectedStandards.join(', ')}
-* 직원수: ${employeeCount || '미입력'}
-* 제품 설계 여부: ${hasProductDesign}
-* 주요 업무: ${businessStatus || '미입력'}
-* 세부 사항: ${details || '미입력'}
---------------------------------------
-[문의 내용]
-${message}
-      `.trim(),
-    }),
-  });
-
-  const mailResult = await mailRes.json();
-  console.log('Web3Forms 전송 결과:', mailResult);
-
-  if (!mailResult.success) {
-    console.warn('메일 전송 실패 사유:', mailResult.message);
-  }
-} catch (mailErr) {
-  console.warn('Web3Forms 네트워크 오류:', mailErr);
-}
-
-
+    setIsUploading(true);
 
     try {
-      // ✅ 1단계: 파일이 있으면 Supabase Storage에 업로드
       let fileUrl = '';
       let fileName = '';
 
@@ -334,31 +361,32 @@ ${message}
         const uniquePath = `${Date.now()}_${Math.random().toString(36).substring(2, 8)}.${ext}`;
 
         const { data: uploadData, error: uploadError } = await supabase.storage
-          .from('inquiry-files')   // ← Supabase Storage 버킷 이름
+          .from('inquiry-files')
           .upload(uniquePath, attachedFile, {
             cacheControl: '3600',
             upsert: false,
           });
 
         if (uploadError) {
-          console.error('파일 업로드 에러:', uploadError);
-          alert('파일 업로드 중 오류가 발생했습니다.\n' + uploadError.message + '\n\nSupabase Storage 버킷(inquiry-files)이 생성되어 있는지 확인해 주세요.');
-          setIsUploading(false);
-          return;
+          console.warn('스토리지 업로드 경고:', uploadError);
+        } else if (uploadData) {
+          const { data: urlData } = supabase.storage
+            .from('inquiry-files')
+            .getPublicUrl(uploadData.path);
+          fileUrl = urlData.publicUrl;
+          fileName = attachedFile.name;
         }
-
-        const { data: urlData } = supabase.storage
-          .from('inquiry-files')
-          .getPublicUrl(uploadData.path);
-
-        fileUrl = urlData.publicUrl;
-        fileName = attachedFile.name;
       }
 
-      // ✅ 2단계: DB 저장 (file_url, file_name 포함)
+      // 통합 작성자 이름 (기존 호환: "고객명 / 담당자")
+      const authorCombined = `${companyName.trim()} / ${managerName.trim()}`;
+
       const payload: any = {
-        author,
-        email,
+        author: authorCombined,
+        company_name: companyName.trim(),
+        manager_name: managerName.trim(),
+        email: email.trim(),
+        phone: phone.trim(),
         standards: selectedStandards.join(', '),
         employee_count: employeeCount,
         business_status: businessStatus,
@@ -374,16 +402,35 @@ ${message}
       const { error: dbError } = await supabase.from('inquiries').insert([payload]);
 
       if (dbError) {
-        console.error('Supabase DB 저장 에러:', dbError);
-        alert('DB 저장 오류: ' + dbError.message);
-        setIsUploading(false);
-        return;
+        // 만약 company_name 등 신규 컬럼이 아직 DB에 없을 경우 기본 author/email 컬럼으로 fallback 저장
+        console.warn('확장 컬럼 저장 재시도(fallback):', dbError);
+        const fallbackPayload = {
+          author: `${authorCombined} (연락처: ${phone})`,
+          email: email.trim(),
+          standards: selectedStandards.join(', '),
+          employee_count: employeeCount,
+          business_status: businessStatus,
+          has_product_design: hasProductDesign,
+          details: `연락처: ${phone} | ${details}`,
+          content: message,
+          is_secret: isSecret,
+          password: isSecret ? password : '',
+          file_url: fileUrl,
+          file_name: fileName,
+        };
+        const { error: fbErr } = await supabase.from('inquiries').insert([fallbackPayload]);
+        if (fbErr) {
+          throw fbErr;
+        }
       }
 
-      // ✅ 3단계: EmailJS 메일 발송
+      // EmailJS 전송
       try {
         const templateParams = {
-          author,
+          author: authorCombined,
+          companyName,
+          managerName,
+          phone,
           email,
           standards: selectedStandards.join(', '),
           employeeCount: employeeCount || '미입력',
@@ -402,14 +449,15 @@ ${message}
           EMAILJS_PUBLIC_KEY
         );
       } catch (emailErr) {
-        console.warn('EmailJS 발송 오류 (DB 저장은 성공함):', emailErr);
+        console.warn('EmailJS 발송 오류:', emailErr);
       }
 
-      // ✅ 4단계: 폼 초기화 및 목록으로 이동
       await fetchPosts();
 
-      setAuthor('');
+      setCompanyName('');
+      setManagerName('');
       setEmail('');
+      setPhone('');
       setIsSecret(false);
       setPassword('');
       setSelectedStandards([]);
@@ -422,7 +470,7 @@ ${message}
       if (fileInputRef.current) fileInputRef.current.value = '';
 
       setInquiryView('list');
-      alert('상담 문의가 성공적으로 접수되었습니다.' + (fileName ? `\n첨부파일: ${fileName}` : ''));
+      alert('상담 문의가 성공적으로 접수되었습니다.');
     } catch (error: any) {
       console.error('등록 에러:', error);
       alert('문의 등록 중 오류가 발생했습니다: ' + (error?.message || '알 수 없는 오류'));
@@ -432,7 +480,7 @@ ${message}
   };
 
   const handlePostClick = (post: InquiryPost) => {
-    if (post.isSecret) {
+    if (post.isSecret && !isAdminLoggedIn) {
       const inputPw = prompt('비밀글입니다. 4자리 비밀번호를 입력해주세요:');
       if (inputPw !== post.password) {
         alert('비밀번호가 일치하지 않습니다.');
@@ -465,7 +513,6 @@ ${message}
   const handleDeletePost = async (postId: string | number) => {
     if (window.confirm('정말 이 문의 글을 삭제하시겠습니까?')) {
       try {
-        // ✅ 첨부파일도 Storage에서 함께 삭제
         const targetPost = posts.find(p => p.id === postId);
         if (targetPost?.fileUrl) {
           const pathMatch = targetPost.fileUrl.match(/inquiry-files\/(.+)$/);
@@ -494,9 +541,10 @@ ${message}
     }
   };
 
+  // 🔑 관리자 로그인
   const handleAdminLogin = (e: React.FormEvent) => {
     e.preventDefault();
-    if (adminPasswordInput === 'admin1234') {
+    if (adminPasswordInput === adminPassword) {
       setIsAdminLoggedIn(true);
       alert('관리자 모드로 로그인되었습니다.');
     } else {
@@ -504,7 +552,85 @@ ${message}
     }
   };
 
-  // ✅ 파일 아이콘 판별
+  // 🔑 관리자 비밀번호 변경
+  const handleChangeAdminPassword = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newAdminPassword) {
+      alert('새 비밀번호를 입력해주세요.');
+      return;
+    }
+    if (newAdminPassword !== confirmAdminPassword) {
+      alert('새 비밀번호와 비밀번호 확인이 일치하지 않습니다.');
+      return;
+    }
+    setAdminPassword(newAdminPassword);
+    localStorage.setItem('bmci_admin_pwd', newAdminPassword);
+    setNewAdminPassword('');
+    setConfirmAdminPassword('');
+    alert('관리자 비밀번호가 성공적으로 변경되었습니다!');
+  };
+
+  // 📑 특정 고객 문의로 견적서 작성 화면으로 이동 및 연동
+  const handleOpenEstimateFromPost = (post: InquiryPost) => {
+    const cName = post.companyName || post.author.split('/')[0].trim();
+    const mName = post.managerName || (post.author.includes('/') ? post.author.split('/')[1]?.trim() : '');
+
+    setEstimateClient({
+      companyName: cName,
+      manager: mName,
+      tel: post.phone || '',
+      email: post.email || '',
+      date: new Date().toISOString().split('T')[0]
+    });
+
+    // 문의 규격에 맞춰 기본 품목 자동 세팅
+    if (post.standards && post.standards.length > 0) {
+      const generatedItems: EstimateItem[] = post.standards.map((std, idx) => ({
+        id: String(idx + 1),
+        name: `${std} 경영시스템 컨설팅`,
+        spec: '시스템 구축 및 인증 지도',
+        quantity: 1,
+        unitPrice: std.includes('16949') ? 6000000 : 4000000,
+        note: ''
+      }));
+      setEstimateItems(generatedItems);
+    }
+
+    setActiveTab('admin');
+    setAdminViewMode('estimate');
+  };
+
+  // 견적서 품목 핸들러
+  const handleItemChange = (index: number, field: keyof EstimateItem, value: any) => {
+    const updated = [...estimateItems];
+    updated[index] = { ...updated[index], [field]: value };
+    setEstimateItems(updated);
+  };
+
+  const handleAddItem = () => {
+    setEstimateItems([
+      ...estimateItems,
+      { id: Date.now().toString(), name: '', spec: '', quantity: 1, unitPrice: 0, note: '' }
+    ]);
+  };
+
+  const handleRemoveItem = (index: number) => {
+    if (estimateItems.length <= 1) {
+      alert('최소 1개 이상의 품목이 필요합니다.');
+      return;
+    }
+    setEstimateItems(estimateItems.filter((_, i) => i !== index));
+  };
+
+  // 금액 계산
+  const subTotal = estimateItems.reduce((acc, item) => acc + (Number(item.quantity) * Number(item.unitPrice) || 0), 0);
+  const totalAmount = Math.max(0, subTotal - (Number(negotiationDiscount) || 0));
+
+  // 인쇄 실행
+  const handlePrintEstimate = () => {
+    window.print();
+  };
+
   const getFileIcon = (fileName: string) => {
     const ext = fileName.split('.').pop()?.toLowerCase() || '';
     if (['jpg', 'jpeg', 'png', 'gif'].includes(ext)) return '🖼️';
@@ -517,7 +643,6 @@ ${message}
     return '📎';
   };
 
-  // ✅ 이미지 파일 여부 판별
   const isImageFile = (fileName: string) => {
     const ext = fileName.split('.').pop()?.toLowerCase() || '';
     return ['jpg', 'jpeg', 'png', 'gif'].includes(ext);
@@ -526,8 +651,33 @@ ${message}
   return (
     <div style={{ minHeight: '100vh', backgroundColor: '#f8fafc', color: '#1e293b', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif', display: 'flex', flexDirection: 'column' }}>
       
+      {/* 🖨️ 인쇄 전용 스타일 태그 */}
+      <style>{`
+        @media print {
+          body * {
+            visibility: hidden;
+          }
+          #printable-estimate-area, #printable-estimate-area * {
+            visibility: visible;
+          }
+          #printable-estimate-area {
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: 100%;
+            margin: 0;
+            padding: 20px;
+            box-shadow: none !important;
+            border: none !important;
+          }
+          .no-print {
+            display: none !important;
+          }
+        }
+      `}</style>
+
       {/* 헤더 */}
-      <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '18px 60px', backgroundColor: '#ffffff', borderBottom: '1px solid #e2e8f0', boxShadow: '0 1px 3px rgba(0,0,0,0.02)' }}>
+      <header className="no-print" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '18px 60px', backgroundColor: '#ffffff', borderBottom: '1px solid #e2e8f0', boxShadow: '0 1px 3px rgba(0,0,0,0.02)' }}>
         <div style={{ cursor: 'pointer', display: 'flex', flexDirection: 'column' }} onClick={() => setActiveTab('home')}>
           <BmciLogo />
           <p style={{ fontSize: '0.65rem', color: '#64748b', margin: '4px 0 0 0', letterSpacing: '0.5px', fontWeight: '600' }}>BEST MANAGEMENT CONSULTING INSTITUTE</p>
@@ -615,7 +765,6 @@ ${message}
               </div>
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: '25px' }}>
-                
                 {selectedModel.rule6thApplicability && (
                   <div style={{ backgroundColor: '#fff8f0', border: '1px solid #ffe0b2', padding: '25px', borderRadius: '10px' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
@@ -653,7 +802,6 @@ ${message}
                     ))}
                   </div>
                 </div>
-
               </div>
             </div>
 
@@ -709,7 +857,7 @@ ${message}
                       <th style={{ padding: '15px' }}>번호</th>
                       <th style={{ padding: '15px' }}>문의 규격</th>
                       <th style={{ padding: '15px' }}>제목 / 내용 요약</th>
-                      <th style={{ padding: '15px' }}>작성자</th>
+                      <th style={{ padding: '15px' }}>고객명 / 담당자</th>
                       <th style={{ padding: '15px' }}>작성일자</th>
                       <th style={{ padding: '15px', textAlign: 'center' }}>첨부</th>
                       <th style={{ padding: '15px', textAlign: 'center' }}>답변 상태</th>
@@ -740,9 +888,10 @@ ${message}
                           <td style={{ padding: '15px', color: '#0f172a', fontWeight: '600' }}>
                             {post.isSecret ? '🔒 비밀글입니다.' : (post.message.length > 30 ? post.message.substring(0, 30) + '...' : post.message)}
                           </td>
-                          <td style={{ padding: '15px', color: '#475569' }}>{post.author}</td>
+                          <td style={{ padding: '15px', color: '#475569' }}>
+                            {post.companyName ? `${post.companyName} (${post.managerName || '-'})` : post.author}
+                          </td>
                           <td style={{ padding: '15px', color: '#64748b', fontSize: '0.9rem' }}>{post.date}</td>
-                          {/* ✅ 첨부파일 여부 표시 */}
                           <td style={{ padding: '15px', textAlign: 'center' }}>
                             {post.fileUrl ? (
                               <span title={post.fileName} style={{ fontSize: '1.2rem' }}>{getFileIcon(post.fileName || '')}</span>
@@ -765,19 +914,55 @@ ${message}
               </div>
             )}
 
-            {/* 작성 뷰 */}
+            {/* 작성 뷰: 고객명, 담당자, 이메일, 연락처 분리 완료 */}
             {inquiryView === 'write' && (
               <div style={{ maxWidth: '750px', margin: '0 auto' }}>
                 <form onSubmit={handleRegisterPost} style={{ backgroundColor: '#ffffff', padding: '40px', borderRadius: '8px', display: 'flex', flexDirection: 'column', gap: '22px', border: '1px solid #e2e8f0', boxShadow: '0 4px 6px rgba(0,0,0,0.02)' }}>
                   
-                  <div style={{ display: 'flex', gap: '20px' }}>
-                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                      <label style={{ fontSize: '0.9rem', color: '#334155', fontWeight: '700' }}>작성자 / 기업명 *</label>
-                      <input type="text" value={author} onChange={e => setAuthor(e.target.value)} placeholder="홍길동 / (주)OO오토모티브" style={inputStyle} required />
+                  {/* 요청하신 입력 항목: 고객명, 담당자, 이메일, 연락처 */}
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                      <label style={{ fontSize: '0.9rem', color: '#334155', fontWeight: '700' }}>고객명 (기업명) *</label>
+                      <input 
+                        type="text" 
+                        value={companyName} 
+                        onChange={e => setCompanyName(e.target.value)} 
+                        placeholder="(주)한국오토모티브" 
+                        style={inputStyle} 
+                        required 
+                      />
                     </div>
-                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                      <label style={{ fontSize: '0.9rem', color: '#334155', fontWeight: '700' }}>담당자 (성함) *</label>
+                      <input 
+                        type="text" 
+                        value={managerName} 
+                        onChange={e => setManagerName(e.target.value)} 
+                        placeholder="홍길동 팀장" 
+                        style={inputStyle} 
+                        required 
+                      />
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                       <label style={{ fontSize: '0.9rem', color: '#334155', fontWeight: '700' }}>회신받을 이메일 *</label>
-                      <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="example@company.com" style={inputStyle} required />
+                      <input 
+                        type="email" 
+                        value={email} 
+                        onChange={e => setEmail(e.target.value)} 
+                        placeholder="example@company.com" 
+                        style={inputStyle} 
+                        required 
+                      />
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                      <label style={{ fontSize: '0.9rem', color: '#334155', fontWeight: '700' }}>연락처 (TEL)</label>
+                      <input 
+                        type="text" 
+                        value={phone} 
+                        onChange={e => setPhone(e.target.value)} 
+                        placeholder="010-1234-5678 or 041-000-0000" 
+                        style={inputStyle} 
+                      />
                     </div>
                   </div>
 
@@ -864,13 +1049,12 @@ ${message}
                     />
                   </div>
 
-                  {/* ✅ 파일 업로드 섹션 */}
+                  {/* 파일 업로드 섹션 */}
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
                     <label style={{ fontSize: '0.9rem', color: '#334155', fontWeight: '700' }}>
                       📎 첨부파일 업로드 <span style={{ fontSize: '0.8rem', color: '#94a3b8', fontWeight: '500' }}>(선택 · 최대 10MB)</span>
                     </label>
 
-                    {/* 파일 미선택 상태: 클릭 유도 영역 */}
                     {!attachedFile && (
                       <label
                         htmlFor="fileUploadInput"
@@ -907,7 +1091,6 @@ ${message}
                       style={{ display: 'none' }}
                     />
 
-                    {/* 파일 선택 후: 미리보기 */}
                     {attachedFile && (
                       <div style={{
                         display: 'flex',
@@ -950,22 +1133,10 @@ ${message}
                       cursor: isUploading ? 'not-allowed' : 'pointer',
                       marginTop: '10px',
                       boxShadow: '0 4px 6px rgba(242, 140, 24, 0.2)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      gap: '8px',
                     }}
                   >
-                    {isUploading ? (
-                      <>
-                        <span style={{ display: 'inline-block', width: '18px', height: '18px', border: '3px solid #fff', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
-                        파일 업로드 중...
-                      </>
-                    ) : '상담 문의 접수하기'}
+                    {isUploading ? '업로드 및 접수 진행 중...' : '상담 문의 접수하기'}
                   </button>
-
-                  <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-
                 </form>
               </div>
             )}
@@ -983,18 +1154,36 @@ ${message}
                         </span>
                       ))}
                     </div>
-                    <h3 style={{ fontSize: '1.4rem', color: '#0f172a', margin: '0 0 10px 0', fontWeight: '800' }}>{selectedPost.author} 님의 문의 내용</h3>
-                    <p style={{ color: '#64748b', fontSize: '0.9rem', margin: 0 }}>작성일자: {selectedPost.date} | 회신 이메일: {selectedPost.email}</p>
+                    <h3 style={{ fontSize: '1.4rem', color: '#0f172a', margin: '0 0 10px 0', fontWeight: '800' }}>
+                      {selectedPost.companyName || selectedPost.author} 님의 문의 내용
+                    </h3>
+                    <p style={{ color: '#64748b', fontSize: '0.9rem', margin: 0 }}>
+                      작성일자: {selectedPost.date} | 담당자: {selectedPost.managerName || '미입력'} | 연락처: {selectedPost.phone || '미입력'} | 회신 이메일: {selectedPost.email}
+                    </p>
                   </div>
 
-                  {isAdminLoggedIn && (
-                    <button onClick={() => handleDeletePost(selectedPost.id)} style={{ backgroundColor: '#ef4444', color: '#fff', border: 'none', padding: '8px 14px', borderRadius: '6px', fontWeight: '700', cursor: 'pointer' }}>
-                      게시글 삭제
-                    </button>
-                  )}
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    {/* 🚀 관리자: 이 고객 문의로 바로 견적서 작성 이동 */}
+                    {isAdminLoggedIn && (
+                      <button 
+                        onClick={() => handleOpenEstimateFromPost(selectedPost)} 
+                        style={{ backgroundColor: '#f28c18', color: '#fff', border: 'none', padding: '8px 14px', borderRadius: '6px', fontWeight: '700', cursor: 'pointer', fontSize: '0.9rem' }}
+                      >
+                        📑 견적서 작성
+                      </button>
+                    )}
+                    {isAdminLoggedIn && (
+                      <button onClick={() => handleDeletePost(selectedPost.id)} style={{ backgroundColor: '#ef4444', color: '#fff', border: 'none', padding: '8px 14px', borderRadius: '6px', fontWeight: '700', cursor: 'pointer' }}>
+                        삭제
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 <div style={{ backgroundColor: '#fff8f0', padding: '20px', borderRadius: '8px', border: '1px solid #ffe0b2', display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '12px', fontSize: '0.95rem' }}>
+                  <div><strong style={{ color: '#e65100' }}>• 고객사명:</strong> {selectedPost.companyName || selectedPost.author}</div>
+                  <div><strong style={{ color: '#e65100' }}>• 담당자:</strong> {selectedPost.managerName || '미입력'}</div>
+                  <div><strong style={{ color: '#e65100' }}>• 연락처:</strong> {selectedPost.phone || '미입력'}</div>
                   <div><strong style={{ color: '#e65100' }}>• 직원수:</strong> {selectedPost.employeeCount || '미입력'}</div>
                   <div><strong style={{ color: '#e65100' }}>• 제품 설계 적용 여부:</strong> {selectedPost.hasProductDesign || '아니오'}</div>
                   <div style={{ gridColumn: 'span 2' }}><strong style={{ color: '#e65100' }}>• 주요 업무 현황:</strong> {selectedPost.businessStatus || '미입력'}</div>
@@ -1005,12 +1194,10 @@ ${message}
                   {selectedPost.message}
                 </div>
 
-                {/* ✅ 첨부파일 표시 영역 */}
                 {selectedPost.fileUrl && selectedPost.fileName && (
                   <div style={{ backgroundColor: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: '8px', padding: '18px 20px' }}>
                     <p style={{ margin: '0 0 12px 0', fontWeight: '700', color: '#0369a1', fontSize: '0.95rem' }}>📎 첨부파일</p>
                     
-                    {/* 이미지면 미리보기 */}
                     {isImageFile(selectedPost.fileName) && (
                       <img
                         src={selectedPost.fileUrl}
@@ -1062,11 +1249,11 @@ ${message}
           </div>
         )}
 
-        {/* 5. 관리자 */}
+        {/* 5. 관리자 페이지 (비밀번호 변경 및 견적서 출력 기능) */}
         {activeTab === 'admin' && (
-          <div style={{ maxWidth: '600px', margin: '40px auto' }}>
+          <div>
             {!isAdminLoggedIn ? (
-              <div style={{ backgroundColor: '#ffffff', padding: '40px', borderRadius: '8px', border: '1px solid #e2e8f0', boxShadow: '0 4px 6px rgba(0,0,0,0.02)', textAlign: 'center' }}>
+              <div style={{ maxWidth: '500px', margin: '40px auto', backgroundColor: '#ffffff', padding: '40px', borderRadius: '8px', border: '1px solid #e2e8f0', boxShadow: '0 4px 6px rgba(0,0,0,0.02)', textAlign: 'center' }}>
                 <h2 style={{ fontSize: '1.8rem', fontWeight: '800', color: '#0f172a', marginBottom: '10px' }}>관리자 인증</h2>
                 <p style={{ color: '#64748b', marginBottom: '25px' }}>관리자 전용 기능을 이용하려면 비밀번호를 입력하세요.</p>
                 <form onSubmit={handleAdminLogin} style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
@@ -1084,21 +1271,399 @@ ${message}
                 </form>
               </div>
             ) : (
-              <div style={{ backgroundColor: '#ffffff', padding: '40px', borderRadius: '8px', border: '1px solid #e2e8f0', boxShadow: '0 4px 6px rgba(0,0,0,0.02)', textAlign: 'center' }}>
-                <span style={{ backgroundColor: '#dcfce7', color: '#166534', padding: '6px 14px', borderRadius: '20px', fontSize: '0.85rem', fontWeight: '700' }}>
-                  관리자 권한 활성화됨
-                </span>
-                <h2 style={{ fontSize: '1.8rem', fontWeight: '800', color: '#0f172a', margin: '15px 0 10px 0' }}>BMCI 관리자 대시보드</h2>
-                <p style={{ color: '#64748b', marginBottom: '30px' }}>고객 문의 게시판에서 글을 클릭하여 상세 답변을 작성하거나 삭제할 수 있습니다.</p>
-                
-                <div style={{ display: 'flex', gap: '15px', justifyContent: 'center' }}>
-                  <button onClick={() => { setActiveTab('inquiry'); setInquiryView('list'); }} style={{ backgroundColor: '#f28c18', color: '#fff', border: 'none', padding: '12px 24px', borderRadius: '6px', fontWeight: '700', cursor: 'pointer' }}>
-                    문의 게시판 관리로 이동
-                  </button>
-                  <button onClick={() => setIsAdminLoggedIn(false)} style={{ backgroundColor: '#ef4444', color: '#fff', border: 'none', padding: '12px 24px', borderRadius: '6px', fontWeight: '700', cursor: 'pointer' }}>
-                    로그아웃
-                  </button>
+              <div>
+                {/* 관리자 상단 바 */}
+                <div className="no-print" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '25px', padding: '15px 25px', backgroundColor: '#ffffff', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
+                    <span style={{ backgroundColor: '#dcfce7', color: '#166534', padding: '4px 12px', borderRadius: '20px', fontSize: '0.85rem', fontWeight: '700' }}>
+                      관리자 모드 접속 중
+                    </span>
+                    <button 
+                      onClick={() => setAdminViewMode('dashboard')} 
+                      style={{ ...tabToggleBtn(adminViewMode === 'dashboard') }}
+                    >
+                      ⚙️ 관리자 대시보드 (비번 변경)
+                    </button>
+                    <button 
+                      onClick={() => setAdminViewMode('estimate')} 
+                      style={{ ...tabToggleBtn(adminViewMode === 'estimate') }}
+                    >
+                      📄 견적서 작성 & PDF 인쇄
+                    </button>
+                  </div>
+
+                  <div style={{ display: 'flex', gap: '10px' }}>
+                    <button onClick={() => { setActiveTab('inquiry'); setInquiryView('list'); }} style={{ backgroundColor: '#f1f5f9', color: '#334155', border: '1px solid #cbd5e1', padding: '8px 16px', borderRadius: '6px', fontWeight: '600', cursor: 'pointer' }}>
+                      게시판으로 이동
+                    </button>
+                    <button onClick={() => setIsAdminLoggedIn(false)} style={{ backgroundColor: '#ef4444', color: '#fff', border: 'none', padding: '8px 16px', borderRadius: '6px', fontWeight: '600', cursor: 'pointer' }}>
+                      로그아웃
+                    </button>
+                  </div>
                 </div>
+
+                {/* 5-1. 관리자 대시보드 (비밀번호 변경 등) */}
+                {adminViewMode === 'dashboard' && (
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '25px' }}>
+                    
+                    {/* 비밀번호 변경 폼 */}
+                    <div style={{ backgroundColor: '#ffffff', padding: '30px', borderRadius: '8px', border: '1px solid #e2e8f0', boxShadow: '0 4px 6px rgba(0,0,0,0.02)' }}>
+                      <h3 style={{ fontSize: '1.3rem', color: '#0f172a', fontWeight: '800', marginBottom: '8px' }}>🔐 관리자 비밀번호 변경</h3>
+                      <p style={{ color: '#64748b', fontSize: '0.9rem', marginBottom: '20px' }}>새로운 관리자 비밀번호를 설정할 수 있습니다.</p>
+                      
+                      <form onSubmit={handleChangeAdminPassword} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                          <label style={{ fontSize: '0.85rem', fontWeight: '700', color: '#334155' }}>새 비밀번호</label>
+                          <input 
+                            type="password" 
+                            value={newAdminPassword} 
+                            onChange={e => setNewAdminPassword(e.target.value)} 
+                            placeholder="새 비밀번호 입력" 
+                            style={inputStyle} 
+                            required 
+                          />
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                          <label style={{ fontSize: '0.85rem', fontWeight: '700', color: '#334155' }}>새 비밀번호 확인</label>
+                          <input 
+                            type="password" 
+                            value={confirmAdminPassword} 
+                            onChange={e => setConfirmAdminPassword(e.target.value)} 
+                            placeholder="새 비밀번호 다시 입력" 
+                            style={inputStyle} 
+                            required 
+                          />
+                        </div>
+                        <button type="submit" style={{ backgroundColor: '#f28c18', color: '#ffffff', border: 'none', padding: '12px', borderRadius: '6px', fontWeight: '700', cursor: 'pointer', marginTop: '10px' }}>
+                          비밀번호 변경 완료
+                        </button>
+                      </form>
+                    </div>
+
+                    {/* 빠른 작업 안내 */}
+                    <div style={{ backgroundColor: '#ffffff', padding: '30px', borderRadius: '8px', border: '1px solid #e2e8f0', boxShadow: '0 4px 6px rgba(0,0,0,0.02)' }}>
+                      <h3 style={{ fontSize: '1.3rem', color: '#0f172a', fontWeight: '800', marginBottom: '8px' }}>🚀 견적서 및 문의글 관리</h3>
+                      <p style={{ color: '#64748b', fontSize: '0.9rem', marginBottom: '20px' }}>고객이 남긴 상담글을 기반으로 손쉽게 공식 견적서를 작성할 수 있습니다.</p>
+                      
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                        <div style={{ backgroundColor: '#fff8f0', padding: '15px', borderRadius: '6px', border: '1px solid #ffe0b2', fontSize: '0.95rem' }}>
+                          <strong>• 최근 접수된 문의:</strong> {posts.length}건
+                        </div>
+                        <button 
+                          onClick={() => setAdminViewMode('estimate')} 
+                          style={{ backgroundColor: '#0f172a', color: '#ffffff', border: 'none', padding: '14px', borderRadius: '6px', fontWeight: '700', cursor: 'pointer', textAlign: 'center' }}
+                        >
+                          새 견적서 작성 화면으로 이동
+                        </button>
+                      </div>
+                    </div>
+
+                  </div>
+                )}
+
+                {/* 5-2. 견적서 작성 및 PDF 인쇄 뷰 (요청하신 양식 100% 반영) */}
+                {adminViewMode === 'estimate' && (
+                  <div>
+                    {/* 상단 컨트롤러 (인쇄 시 숨김) */}
+                    <div className="no-print" style={{ backgroundColor: '#ffffff', padding: '20px 25px', borderRadius: '8px', border: '1px solid #e2e8f0', marginBottom: '25px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <div>
+                        <h3 style={{ margin: 0, fontSize: '1.25rem', color: '#0f172a', fontWeight: '800' }}>공식 견적서 작성 & PDF 출력</h3>
+                        <p style={{ margin: '4px 0 0 0', color: '#64748b', fontSize: '0.85rem' }}>아래 표에서 직접 수정 후 [PDF 출력 / 인쇄] 버튼을 누르면 A4 규격으로 출력됩니다.</p>
+                      </div>
+
+                      <div style={{ display: 'flex', gap: '10px' }}>
+                        <button 
+                          onClick={handleAddItem} 
+                          style={{ backgroundColor: '#f1f5f9', color: '#0f172a', border: '1px solid #cbd5e1', padding: '10px 16px', borderRadius: '6px', fontWeight: '700', cursor: 'pointer' }}
+                        >
+                          + 품목 추가
+                        </button>
+                        <button 
+                          onClick={handlePrintEstimate} 
+                          style={{ backgroundColor: '#f28c18', color: '#ffffff', border: 'none', padding: '10px 22px', borderRadius: '6px', fontWeight: '800', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', boxShadow: '0 4px 6px rgba(242,140,24,0.3)' }}
+                        >
+                          🖨️ PDF 출력 / 인쇄
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* 🖨️ 인쇄될 견적서 영역 (첨부 이미지 양식 정확 일치) */}
+                    <div 
+                      id="printable-estimate-area" 
+                      style={{ 
+                        backgroundColor: '#ffffff', 
+                        padding: '30px 40px', 
+                        border: '1px solid #cbd5e1', 
+                        borderRadius: '4px', 
+                        maxWidth: '850px', 
+                        margin: '0 auto', 
+                        boxShadow: '0 4px 15px rgba(0,0,0,0.05)',
+                        color: '#000000',
+                        fontFamily: '"Malgun Gothic", "맑은 고딕", AppleSDGothicNeo-Regular, sans-serif'
+                      }}
+                    >
+                      {/* 타이틀 */}
+                      <div style={{ textAlign: 'center', marginBottom: '25px' }}>
+                        <h1 style={{ fontSize: '2.4rem', letterSpacing: '18px', margin: 0, fontWeight: '900', borderBottom: '2px solid #000', display: 'inline-block', paddingBottom: '4px' }}>
+                          견 적 서
+                        </h1>
+                      </div>
+
+                      {/* 상단 2열 정보: 좌측 공급받는 자 / 우측 공급자 정보 */}
+                      <div style={{ display: 'grid', gridTemplateColumns: '45% 55%', gap: '15px', marginBottom: '15px' }}>
+                        
+                        {/* 공급받는 자 (좌측) */}
+                        <div style={{ border: '2px solid #000', padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                          <div style={{ display: 'flex', alignItems: 'center' }}>
+                            <span style={{ width: '80px', fontWeight: '700', fontSize: '0.95rem' }}>업 체 명 :</span>
+                            <input 
+                              type="text" 
+                              value={estimateClient.companyName} 
+                              onChange={e => setEstimateClient({ ...estimateClient, companyName: e.target.value })} 
+                              style={estimateInputStyle} 
+                              placeholder="업체명 입력"
+                            />
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center' }}>
+                            <span style={{ width: '80px', fontWeight: '700', fontSize: '0.95rem' }}>담 당 :</span>
+                            <input 
+                              type="text" 
+                              value={estimateClient.manager} 
+                              onChange={e => setEstimateClient({ ...estimateClient, manager: e.target.value })} 
+                              style={estimateInputStyle} 
+                              placeholder="담당자명 입력"
+                            />
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center' }}>
+                            <span style={{ width: '80px', fontWeight: '700', fontSize: '0.95rem' }}>TEL. :</span>
+                            <input 
+                              type="text" 
+                              value={estimateClient.tel} 
+                              onChange={e => setEstimateClient({ ...estimateClient, tel: e.target.value })} 
+                              style={estimateInputStyle} 
+                              placeholder="연락처 입력"
+                            />
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center' }}>
+                            <span style={{ width: '80px', fontWeight: '700', fontSize: '0.95rem' }}>e-mail :</span>
+                            <input 
+                              type="text" 
+                              value={estimateClient.email} 
+                              onChange={e => setEstimateClient({ ...estimateClient, email: e.target.value })} 
+                              style={estimateInputStyle} 
+                              placeholder="이메일 입력"
+                            />
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center' }}>
+                            <span style={{ width: '80px', fontWeight: '700', fontSize: '0.95rem' }}>견적일자 :</span>
+                            <input 
+                              type="text" 
+                              value={estimateClient.date} 
+                              onChange={e => setEstimateClient({ ...estimateClient, date: e.target.value })} 
+                              style={estimateInputStyle} 
+                            />
+                          </div>
+                        </div>
+
+                        {/* 공급자 정보 (우측 - 첨부 이미지와 정확히 동일) */}
+                        <table style={{ width: '100%', borderCollapse: 'collapse', border: '2px solid #000', textAlign: 'center', fontSize: '0.88rem' }}>
+                          <tbody>
+                            <tr>
+                              <td rowSpan={4} style={{ width: '28px', borderRight: '1px solid #000', fontWeight: '700', padding: '4px', backgroundColor: '#fafafa' }}>공<br/>급<br/>자</td>
+                              <td style={{ borderBottom: '1px solid #000', borderRight: '1px solid #000', padding: '6px 4px', fontWeight: '700', width: '65px' }}>등록번호</td>
+                              <td colSpan={3} style={{ borderBottom: '1px solid #000', padding: '6px', fontWeight: '800', fontSize: '1rem', letterSpacing: '2px' }}>
+                                313-66-00033
+                              </td>
+                            </tr>
+                            <tr>
+                              <td style={{ borderBottom: '1px solid #000', borderRight: '1px solid #000', padding: '6px 4px', fontWeight: '700' }}>상 호</td>
+                              <td style={{ borderBottom: '1px solid #000', borderRight: '1px solid #000', padding: '6px', fontWeight: '800' }}>비엠씨아이</td>
+                              <td style={{ borderBottom: '1px solid #000', borderRight: '1px solid #000', padding: '6px 4px', fontWeight: '700', width: '45px' }}>대 표</td>
+                              <td style={{ borderBottom: '1px solid #000', padding: '6px', fontWeight: '800' }}>
+                                강 병 수 <span style={{ color: '#dc2626', fontWeight: '900', border: '1px solid #dc2626', borderRadius: '50%', padding: '1px 3px', fontSize: '0.75rem', marginLeft: '4px' }}>인</span>
+                              </td>
+                            </tr>
+                            <tr>
+                              <td style={{ borderBottom: '1px solid #000', borderRight: '1px solid #000', padding: '6px 4px', fontWeight: '700' }}>주 소</td>
+                              <td style={{ borderBottom: '1px solid #000', borderRight: '1px solid #000', padding: '6px', fontSize: '0.8rem' }}>충남 아산시 배방로<br/>105번길 31</td>
+                              <td style={{ borderBottom: '1px solid #000', borderRight: '1px solid #000', padding: '6px 4px', fontWeight: '700' }}>TEL</td>
+                              <td style={{ borderBottom: '1px solid #000', padding: '6px', fontSize: '0.85rem' }}>041)910-2057</td>
+                            </tr>
+                            <tr>
+                              <td style={{ borderRight: '1px solid #000', padding: '6px 4px', fontWeight: '700' }}>업 태</td>
+                              <td style={{ borderRight: '1px solid #000', padding: '6px' }}>서비스</td>
+                              <td style={{ borderRight: '1px solid #000', padding: '6px 4px', fontWeight: '700' }}>종 목</td>
+                              <td style={{ padding: '6px' }}>경영컨설팅</td>
+                            </tr>
+                          </tbody>
+                        </table>
+
+                      </div>
+
+                      {/* 안내 문구 */}
+                      <div style={{ textAlign: 'center', fontSize: '1rem', fontWeight: '700', margin: '14px 0', letterSpacing: '1px' }}>
+                        아 래 와 &nbsp; 같 이 &nbsp; 견 적 &nbsp; 드 리 오 니 &nbsp; 검 토 &nbsp; 바 랍 니 다 .
+                      </div>
+
+                      {/* 합계금액 바 */}
+                      <div style={{ border: '2px solid #000', padding: '10px 16px', fontSize: '1.05rem', fontWeight: '800', display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', backgroundColor: '#fcfcfc' }}>
+                        <div>
+                          합계금액 : 일금 &nbsp; <span style={{ textDecoration: 'underline', color: '#000000', fontWeight: '900' }}>{numberToKoreanAmount(totalAmount)}</span> &nbsp; 원정
+                        </div>
+                        <div>
+                          (₩ {totalAmount.toLocaleString()} 원) - <span style={{ color: '#000' }}>VAT별도</span>
+                        </div>
+                      </div>
+
+                      {/* 견적서 품목 테이블 */}
+                      <table style={{ width: '100%', borderCollapse: 'collapse', border: '2px solid #000', textAlign: 'center', fontSize: '0.9rem' }}>
+                        <thead>
+                          <tr style={{ borderBottom: '2px solid #000', backgroundColor: '#f8f8f8', fontWeight: '800' }}>
+                            <th style={{ width: '45px', borderRight: '1px solid #000', padding: '8px 4px' }}>NO</th>
+                            <th style={{ borderRight: '1px solid #000', padding: '8px' }}>품 &nbsp; 명</th>
+                            <th style={{ width: '150px', borderRight: '1px solid #000', padding: '8px' }}>규 &nbsp; 격</th>
+                            <th style={{ width: '55px', borderRight: '1px solid #000', padding: '8px' }}>수 량</th>
+                            <th style={{ width: '110px', borderRight: '1px solid #000', padding: '8px' }}>단 &nbsp; 가</th>
+                            <th style={{ width: '120px', borderRight: '1px solid #000', padding: '8px' }}>금 &nbsp; 액</th>
+                            <th style={{ width: '80px', padding: '8px' }}>비 &nbsp; 고</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {estimateItems.map((item, index) => {
+                            const amount = (Number(item.quantity) || 0) * (Number(item.unitPrice) || 0);
+                            return (
+                              <tr key={item.id} style={{ borderBottom: '1px solid #000' }}>
+                                <td style={{ borderRight: '1px solid #000', padding: '8px 4px', fontWeight: '600' }}>
+                                  {index + 1}
+                                </td>
+                                <td style={{ borderRight: '1px solid #000', padding: '4px' }}>
+                                  <input 
+                                    type="text" 
+                                    value={item.name} 
+                                    onChange={e => handleItemChange(index, 'name', e.target.value)} 
+                                    style={{ ...tableInputStyle, textAlign: 'left', fontWeight: '600' }} 
+                                    placeholder="품명"
+                                  />
+                                </td>
+                                <td style={{ borderRight: '1px solid #000', padding: '4px' }}>
+                                  <input 
+                                    type="text" 
+                                    value={item.spec} 
+                                    onChange={e => handleItemChange(index, 'spec', e.target.value)} 
+                                    style={tableInputStyle} 
+                                    placeholder="규격/내용"
+                                  />
+                                </td>
+                                <td style={{ borderRight: '1px solid #000', padding: '4px' }}>
+                                  <input 
+                                    type="number" 
+                                    value={item.quantity} 
+                                    onChange={e => handleItemChange(index, 'quantity', Number(e.target.value))} 
+                                    style={{ ...tableInputStyle, textAlign: 'center' }} 
+                                  />
+                                </td>
+                                <td style={{ borderRight: '1px solid #000', padding: '4px' }}>
+                                  <input 
+                                    type="number" 
+                                    value={item.unitPrice} 
+                                    onChange={e => handleItemChange(index, 'unitPrice', Number(e.target.value))} 
+                                    style={{ ...tableInputStyle, textAlign: 'right' }} 
+                                  />
+                                </td>
+                                <td style={{ borderRight: '1px solid #000', padding: '8px', textAlign: 'right', fontWeight: '700' }}>
+                                  {amount.toLocaleString()}
+                                </td>
+                                <td style={{ padding: '4px', position: 'relative' }}>
+                                  <input 
+                                    type="text" 
+                                    value={item.note} 
+                                    onChange={e => handleItemChange(index, 'note', e.target.value)} 
+                                    style={tableInputStyle} 
+                                  />
+                                  {estimateItems.length > 1 && (
+                                    <button 
+                                      className="no-print" 
+                                      onClick={() => handleRemoveItem(index)}
+                                      style={{ position: 'absolute', right: '-25px', top: '8px', background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontWeight: 'bold' }}
+                                      title="품목 삭제"
+                                    >
+                                      ✕
+                                    </button>
+                                  )}
+                                </td>
+                              </tr>
+                            );
+                          })}
+
+                          {/* 요청하신 네고(할인) 항목 */}
+                          <tr style={{ borderBottom: '1px solid #000', backgroundColor: '#fffbf5' }}>
+                            <td style={{ borderRight: '1px solid #000', padding: '8px 4px', fontWeight: '700', color: '#c2410c' }}>네고</td>
+                            <td style={{ borderRight: '1px solid #000', padding: '8px', textAlign: 'left', fontWeight: '700', color: '#c2410c' }}>
+                              특별 할인 / 네고 반영
+                            </td>
+                            <td style={{ borderRight: '1px solid #000', padding: '8px' }}>DC</td>
+                            <td style={{ borderRight: '1px solid #000', padding: '8px' }}>1</td>
+                            <td style={{ borderRight: '1px solid #000', padding: '4px' }}>
+                              <input 
+                                type="number" 
+                                value={negotiationDiscount} 
+                                onChange={e => setNegotiationDiscount(Number(e.target.value))} 
+                                style={{ ...tableInputStyle, textAlign: 'right', color: '#c2410c', fontWeight: '700' }} 
+                                placeholder="할인 금액"
+                              />
+                            </td>
+                            <td style={{ borderRight: '1px solid #000', padding: '8px', textAlign: 'right', color: '#c2410c', fontWeight: '800' }}>
+                              -{Number(negotiationDiscount).toLocaleString()}
+                            </td>
+                            <td style={{ padding: '8px', fontSize: '0.8rem', color: '#c2410c' }}>네고적용</td>
+                          </tr>
+
+                          {/* 양식상 여백을 채워주는 빈 행들 (실제 출력시 A4 양식 미려하게 유지) */}
+                          {Array.from({ length: Math.max(0, 7 - estimateItems.length) }).map((_, i) => (
+                            <tr key={`empty_${i}`} style={{ borderBottom: '1px solid #000', height: '34px' }}>
+                              <td style={{ borderRight: '1px solid #000' }}></td>
+                              <td style={{ borderRight: '1px solid #000' }}></td>
+                              <td style={{ borderRight: '1px solid #000' }}></td>
+                              <td style={{ borderRight: '1px solid #000' }}></td>
+                              <td style={{ borderRight: '1px solid #000' }}></td>
+                              <td style={{ borderRight: '1px solid #000' }}></td>
+                              <td></td>
+                            </tr>
+                          ))}
+
+                          {/* 맨 아래 자동 합계 행 */}
+                          <tr style={{ backgroundColor: '#f5f5f5', fontWeight: '900', borderTop: '2px solid #000', height: '40px' }}>
+                            <td colSpan={2} style={{ borderRight: '1px solid #000', letterSpacing: '10px', textAlign: 'center', fontSize: '1rem' }}>
+                              합 &nbsp; 계
+                            </td>
+                            <td style={{ borderRight: '1px solid #000' }}>-</td>
+                            <td style={{ borderRight: '1px solid #000' }}>-</td>
+                            <td style={{ borderRight: '1px solid #000' }}>-</td>
+                            <td style={{ borderRight: '1px solid #000', textAlign: 'right', padding: '8px', fontSize: '1.1rem', color: '#000' }}>
+                              {totalAmount.toLocaleString()}
+                            </td>
+                            <td></td>
+                          </tr>
+                        </tbody>
+                      </table>
+
+                      {/* 하단 특기사항 영역 */}
+                      <div style={{ border: '2px solid #000', borderTop: 'none', padding: '16px 20px', marginTop: '0' }}>
+                        <div style={{ textAlign: 'center', fontWeight: '800', fontSize: '0.95rem', letterSpacing: '8px', marginBottom: '10px' }}>
+                          특 &nbsp; 기 &nbsp; 사 &nbsp; 항
+                        </div>
+                        <textarea 
+                          rows={3} 
+                          value={estimateSpecialNote} 
+                          onChange={e => setEstimateSpecialNote(e.target.value)} 
+                          style={{ width: '100%', border: 'none', outline: 'none', resize: 'vertical', fontSize: '0.95rem', lineHeight: '1.6', fontFamily: 'inherit', backgroundColor: 'transparent' }} 
+                        />
+                      </div>
+
+                    </div>
+                  </div>
+                )}
+
               </div>
             )}
           </div>
@@ -1107,7 +1672,7 @@ ${message}
       </main>
 
       {/* 푸터 */}
-      <footer style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '20px 60px', backgroundColor: '#ffffff', borderTop: '1px solid #e2e8f0', color: '#64748b', fontSize: '0.85rem' }}>
+      <footer className="no-print" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '20px 60px', backgroundColor: '#ffffff', borderTop: '1px solid #e2e8f0', color: '#64748b', fontSize: '0.85rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
           <BmciLogo scale={0.8} />
           <p style={{ margin: 0, color: '#94a3b8' }}>© 2026 BMCI. All rights reserved.</p>
@@ -1139,6 +1704,18 @@ function isActiveStyle(active: boolean) {
 
 const navBtnStyle = (active: boolean) => isActiveStyle(active);
 
+const tabToggleBtn = (active: boolean) => ({
+  backgroundColor: active ? '#f28c18' : '#f1f5f9',
+  color: active ? '#ffffff' : '#334155',
+  border: 'none',
+  padding: '8px 16px',
+  borderRadius: '6px',
+  fontWeight: '700',
+  fontSize: '0.88rem',
+  cursor: 'pointer',
+  transition: 'all 0.2s'
+});
+
 const inputStyle = {
   padding: '12px 14px',
   borderRadius: '6px',
@@ -1147,4 +1724,24 @@ const inputStyle = {
   color: '#0f172a',
   fontSize: '1rem',
   outline: 'none'
+};
+
+const estimateInputStyle = {
+  flex: 1,
+  border: 'none',
+  borderBottom: '1px solid #cbd5e1',
+  padding: '3px 6px',
+  fontSize: '0.92rem',
+  outline: 'none',
+  fontFamily: 'inherit'
+};
+
+const tableInputStyle = {
+  width: '100%',
+  border: 'none',
+  outline: 'none',
+  background: 'transparent',
+  padding: '4px',
+  fontSize: '0.9rem',
+  fontFamily: 'inherit'
 };
