@@ -3,8 +3,8 @@ import { supabase } from './supabaseClient';
 import emailjs from '@emailjs/browser';
 
 // ⚠️ EmailJS 키 정보
-const EMAILJS_SERVICE_ID = 'service_z48cral';
-const EMAILJS_TEMPLATE_ID = 'template_ppm30h9';
+const EMAILJS_SERVICE_ID = 'service_i5ie98c';
+const EMAILJS_TEMPLATE_ID = 'template_6gnvbpe';
 const EMAILJS_PUBLIC_KEY = 'qi8lkMugMKocXZa4K'; 
 
 const MODELS = [
